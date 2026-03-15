@@ -1,8 +1,36 @@
-# Local Whiteboard App
+# SysDesignMock
 
-CRUD whiteboards locally using the official Excalidraw editor.
+Local-first system design practice app built on top of the official Excalidraw editor.
 
-## Run
+It lets you:
+- create, open, update, and delete whiteboards
+- autosave boards to a local server
+- record narrated design walkthroughs
+- replay saved interview recordings with synced screenshots
+- manage saved replays from the editor
+
+## Features
+
+- Embedded Excalidraw editor using `@excalidraw/excalidraw`
+- Board CRUD from a custom home page
+- Manual save plus autosave every 30 seconds when the board is dirty
+- Dirty-state tracking that ignores unstable Excalidraw metadata
+- PNG preview generation for saved boards
+- Microphone recording during board editing
+- Screenshot capture during recording
+- Replay page for audio + synced screenshots
+- Delete saved replays
+- Local filesystem persistence with no cloud dependency
+
+## Tech Stack
+
+- React
+- Vite
+- Express
+- TypeScript
+- Excalidraw
+
+## Development
 
 Install dependencies:
 
@@ -10,21 +38,21 @@ Install dependencies:
 npm.cmd install
 ```
 
-Start development mode:
+Start both frontend and backend in development mode:
 
 ```powershell
 npm.cmd run dev
 ```
 
 Frontend:
-
 - `http://localhost:5173`
 
 Backend API:
-
 - `http://localhost:3001`
 
-Build for production:
+## Production Build
+
+Build the client and server:
 
 ```powershell
 npm.cmd run build
@@ -36,29 +64,88 @@ Start the production server:
 npm.cmd start
 ```
 
-## What It Does
+## Testing
 
-- create a new board from the home page
-- open a board in the embedded Excalidraw editor
-- save board content to the local server
-- list saved boards on the home page
-- reopen and keep editing saved boards
-- delete boards
-- generate a PNG preview on save
+Run the automated tests:
 
-## Local Storage
+```powershell
+npm.cmd test
+```
 
-Saved board files are written under:
+Current automated coverage includes:
+- board CRUD API lifecycle
+- recording create/get/delete API path
+- autosave countdown logic
+- dirty-state detection logic
+
+## How It Works
+
+### Boards
+
+- A board is stored as Excalidraw scene JSON plus metadata.
+- Opening a board loads the saved scene into the embedded Excalidraw editor.
+- Saving writes scene data and preview images to local disk.
+
+### Autosave
+
+- Autosave runs every 30 seconds only when the board has unsaved changes.
+- No autosave runs when there is no real scene or title change.
+
+### Recording and Replay
+
+- While editing a board, the user can start microphone recording.
+- The app captures board screenshots during the walkthrough.
+- On stop, the app saves:
+  - audio
+  - replay metadata
+  - screenshot frames
+- Replays can be opened from the editor and played back later.
+
+Important:
+- Replay is implemented as audio + synced screenshots inside the app.
+- It is not currently exported as a standalone video file like `.mp4`.
+
+## Local Storage Layout
+
+App data is written under:
 
 ```text
 data/
   boards/
   meta/
   previews/
+  recordings/
 ```
+
+Typical recording layout:
+
+```text
+data/
+  recordings/
+    <board-id>/
+      <recording-id>.json
+      <recording-id>.webm
+      <recording-id>-frame-0.png
+      <recording-id>-frame-1.png
+```
+
+## API Overview
+
+Board endpoints:
+- `GET /api/boards`
+- `POST /api/boards`
+- `GET /api/boards/:id`
+- `PUT /api/boards/:id`
+- `DELETE /api/boards/:id`
+
+Recording endpoints:
+- `GET /api/boards/:id/recordings`
+- `POST /api/boards/:id/recordings`
+- `GET /api/boards/:id/recordings/:recordingId`
+- `DELETE /api/boards/:id/recordings/:recordingId`
 
 ## Notes
 
-- the drawing editor uses `@excalidraw/excalidraw`
-- the app shell around it is custom
-- production build is currently large because Excalidraw ships a substantial client bundle
+- The editor UX comes from Excalidraw, but the surrounding app shell is custom.
+- The production client bundle is large because Excalidraw ships a substantial editor runtime.
+- Recording playback support depends on browser audio format support.
