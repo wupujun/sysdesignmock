@@ -1,0 +1,10 @@
+node_modules
+dist
+data
+.git
+.client.err.log
+.client.out.log
+.dev.err.log
+.dev.out.log
+.server.err.log
+.server.out.log

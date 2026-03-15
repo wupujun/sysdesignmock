@@ -50,6 +50,33 @@ Frontend:
 Backend API:
 - `http://localhost:3001`
 
+## Docker
+
+Run the app locally in Docker:
+
+```powershell
+docker compose up --build
+```
+
+Open:
+- `http://localhost:3001`
+
+Notes:
+- In Docker, the client is served by the Node server from the production build.
+- Board data, previews, and recordings are persisted in the named Docker volume `sysdesignmock-data`.
+
+Stop the containers:
+
+```powershell
+docker compose down
+```
+
+Remove the persisted data volume too:
+
+```powershell
+docker compose down -v
+```
+
 ## Production Build
 
 Build the client and server:
@@ -115,6 +142,12 @@ data/
   meta/
   previews/
   recordings/
+```
+
+In Docker, this maps to:
+
+```text
+/app/data
 ```
 
 Typical recording layout:
