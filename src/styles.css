@@ -327,10 +327,8 @@ p {
 }
 
 .recordings-popover {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: min(420px, 80vw);
+  position: fixed;
+  z-index: 10000;
   max-height: min(60vh, 480px);
   overflow: auto;
   padding: 12px;

@@ -1,5 +1,6 @@
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   createRecording,
@@ -53,6 +54,7 @@ export function EditorPage() {
   const recordingIntervalRef = useRef<number | null>(null);
   const recordingStartedAtRef = useRef<number | null>(null);
   const recordingMimeTypeRef = useRef<string>("");
+  const recordingsMenuRef = useRef<HTMLDivElement | null>(null);
   const [title, setTitle] = useState("Untitled board");
   const [initialScene, setInitialScene] = useState<SceneData | null>(null);
   const [status, setStatus] = useState<SaveStatus>("loading");
@@ -65,6 +67,7 @@ export function EditorPage() {
   const [recordings, setRecordings] = useState<RecordingMeta[]>([]);
   const [deletingRecordingId, setDeletingRecordingId] = useState<string | null>(null);
   const [isRecordingsPanelOpen, setIsRecordingsPanelOpen] = useState(false);
+  const [recordingsPopoverStyle, setRecordingsPopoverStyle] = useState<{ top: number; right: number; width: number } | null>(null);
 
   useEffect(() => {
     if (!boardId) {
@@ -128,6 +131,58 @@ export function EditorPage() {
       cleanupRecordingResources();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isRecordingsPanelOpen) {
+      return;
+    }
+
+    function updateRecordingsPopoverPosition() {
+      const trigger = recordingsMenuRef.current;
+      if (!trigger) {
+        return;
+      }
+
+      const rect = trigger.getBoundingClientRect();
+      const viewportPadding = 16;
+      const width = Math.min(420, window.innerWidth - viewportPadding * 2);
+      const left = Math.min(rect.right - width, window.innerWidth - viewportPadding - width);
+      setRecordingsPopoverStyle({
+        top: rect.bottom + 8,
+        right: Math.max(viewportPadding, window.innerWidth - (left + width)),
+        width
+      });
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (recordingsMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      const popover = document.getElementById("recordings-popover");
+      if (popover?.contains(target)) {
+        return;
+      }
+
+      setIsRecordingsPanelOpen(false);
+    }
+
+    updateRecordingsPopoverPosition();
+    window.addEventListener("resize", updateRecordingsPopoverPosition);
+    window.addEventListener("scroll", updateRecordingsPopoverPosition, true);
+    document.addEventListener("mousedown", handlePointerDown);
+
+    return () => {
+      window.removeEventListener("resize", updateRecordingsPopoverPosition);
+      window.removeEventListener("scroll", updateRecordingsPopoverPosition, true);
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
+  }, [isRecordingsPanelOpen]);
 
   async function loadBoard(id: string) {
     setStatus("loading");
@@ -379,7 +434,7 @@ export function EditorPage() {
           </div>
         </div>
         <div className="editor-actions">
-          <div className="recordings-menu">
+          <div className="recordings-menu" ref={recordingsMenuRef}>
             <button
               type="button"
               className="secondary-button recordings-menu-toggle"
@@ -388,8 +443,17 @@ export function EditorPage() {
             >
               Replays ({recordings.length})
             </button>
-            {isRecordingsPanelOpen ? (
-              <div className="recordings-popover">
+            {isRecordingsPanelOpen && recordingsPopoverStyle
+              ? createPortal(
+              <div
+                id="recordings-popover"
+                className="recordings-popover"
+                style={{
+                  top: recordingsPopoverStyle.top,
+                  right: recordingsPopoverStyle.right,
+                  width: recordingsPopoverStyle.width
+                }}
+              >
                 {recordings.length === 0 ? (
                   <div className="recordings-empty">Start recording during the walkthrough to save a replay.</div>
                 ) : (
@@ -403,10 +467,15 @@ export function EditorPage() {
                           </span>
                         </div>
                         <div className="recording-card-actions">
-                          <button className="secondary-button" onClick={() => navigate(`/boards/${boardId}/replays/${recording.id}`)}>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => navigate(`/boards/${boardId}/replays/${recording.id}`)}
+                          >
                             Replay
                           </button>
                           <button
+                            type="button"
                             className="danger-button"
                             onClick={() => void handleDeleteRecording(recording.id)}
                             disabled={deletingRecordingId === recording.id}
@@ -418,19 +487,20 @@ export function EditorPage() {
                     ))}
                   </div>
                 )}
-              </div>
+              </div>,
+              document.body
             ) : null}
           </div>
           {recordingStatus === "recording" ? (
-            <button className="danger-button" onClick={() => void handleStopRecording()}>
+            <button type="button" className="danger-button" onClick={() => void handleStopRecording()}>
               Stop Recording
             </button>
           ) : (
-            <button className="secondary-button" onClick={() => void handleStartRecording()} disabled={recordingStatus === "saving"}>
+            <button type="button" className="secondary-button" onClick={() => void handleStartRecording()} disabled={recordingStatus === "saving"}>
               Start Recording
             </button>
           )}
-          <button className="primary-button" onClick={() => void handleSave()} disabled={status === "saving"}>
+          <button type="button" className="primary-button" onClick={() => void handleSave()} disabled={status === "saving"}>
             Save
           </button>
         </div>
