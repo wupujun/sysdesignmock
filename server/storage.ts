@@ -114,6 +114,8 @@ function previewDiskPath(id: string) {
   return path.join(previewsDir, `${id}.png`);
 }
 
+export { previewDiskPath };
+
 function recordingBoardDir(boardId: string) {
   const { recordingsDir } = getStoragePaths();
   return path.join(recordingsDir, boardId);

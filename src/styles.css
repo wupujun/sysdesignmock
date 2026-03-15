@@ -223,6 +223,51 @@ p {
   gap: 12px;
 }
 
+.evaluation-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.evaluation-panel-header,
+.evaluation-rubric-header,
+.evaluation-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.evaluation-field {
+  margin: 0;
+}
+
+.evaluation-results,
+.evaluation-rubric {
+  display: grid;
+  gap: 12px;
+}
+
+.evaluation-rubric-card p,
+.evaluation-results .panel p {
+  margin-bottom: 0;
+}
+
+.evaluation-score,
+.evaluation-score-chip {
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(24, 57, 43, 0.08);
+  color: #18392b;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.evaluation-list {
+  margin: 10px 0 0;
+  padding-left: 20px;
+}
+
 .error {
   color: #8f291c;
 }

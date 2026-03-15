@@ -14,6 +14,7 @@ import {
   saveBoard,
   type SceneData
 } from "./storage.js";
+import { evaluateBoardWithOpenAI } from "./evaluation.js";
 
 const currentFile = fileURLToPath(import.meta.url);
 
@@ -95,6 +96,29 @@ export function createApp() {
       return;
     }
     res.status(204).send();
+  });
+
+  app.post("/api/boards/:id/evaluate", async (req, res) => {
+    const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
+    const model = typeof req.body?.model === "string" && req.body.model.trim() ? req.body.model.trim() : "gpt-5-mini";
+
+    if (!apiKey) {
+      res.status(400).json({ error: "API key is required" });
+      return;
+    }
+
+    try {
+      const evaluation = await evaluateBoardWithOpenAI(req.params.id, apiKey, model);
+      if (!evaluation) {
+        res.status(404).json({ error: "Board not found" });
+        return;
+      }
+      res.json(evaluation);
+    } catch (error) {
+      res.status(502).json({
+        error: error instanceof Error ? error.message : "Board evaluation failed"
+      });
+    }
   });
 
   app.get("/api/boards/:id/recordings", async (req, res) => {

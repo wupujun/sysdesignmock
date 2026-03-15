@@ -152,3 +152,103 @@ test("board CRUD API lifecycle", async (t) => {
   const missingResponse = await fetch(`${baseUrl}/api/boards/${createdBoard.id}`);
   assert.equal(missingResponse.status, 404);
 });
+
+test("board evaluation API validates inputs and returns normalized rubric output", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "whiteboard-eval-api-"));
+  process.env.WHITEBOARD_DATA_DIR = tempDir;
+
+  const originalFetch = globalThis.fetch;
+  let capturedAuthorization = "";
+  let capturedModel = "";
+
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    assert.equal(String(input), "https://api.openai.com/v1/responses");
+    capturedAuthorization = String(init?.headers && (init.headers as Record<string, string>).Authorization);
+    const body = JSON.parse(String(init?.body)) as { model: string };
+    capturedModel = body.model;
+
+    return new Response(
+      JSON.stringify({
+        model: "gpt-5-mini-2025-08-07",
+        output_text: JSON.stringify({
+          summary: "The design has a solid backbone but leaves scaling details thin.",
+          totalScore: 21,
+          maxScore: 30,
+          rubric: [
+            {
+              criterionId: "requirements",
+              title: "Requirements Clarity",
+              score: 4,
+              maxScore: 5,
+              justification: "The board shows the main use case and user flow."
+            }
+          ],
+          strengths: ["Clear top-level service boundaries."],
+          gaps: ["No explicit capacity plan."],
+          recommendations: ["Add datastore partitioning and failure handling."]
+        })
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }
+    );
+  }) as typeof fetch;
+
+  const app = createApp();
+  const server = app.listen(0);
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  t.after(async () => {
+    server.close();
+    globalThis.fetch = originalFetch;
+    delete process.env.WHITEBOARD_DATA_DIR;
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const createResponse = await originalFetch(`${baseUrl}/api/boards`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "Evaluation Board" })
+  });
+  assert.equal(createResponse.status, 201);
+  const createdBoard = await createResponse.json() as { id: string };
+
+  const missingKeyResponse = await originalFetch(`${baseUrl}/api/boards/${createdBoard.id}/evaluate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apiKey: "", model: "gpt-5-mini" })
+  });
+  assert.equal(missingKeyResponse.status, 400);
+
+  const evaluationResponse = await originalFetch(`${baseUrl}/api/boards/${createdBoard.id}/evaluate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apiKey: "test-key", model: "gpt-5-mini" })
+  });
+  assert.equal(evaluationResponse.status, 200);
+
+  const evaluation = await evaluationResponse.json() as {
+    model: string;
+    summary: string;
+    totalScore: number;
+    maxScore: number;
+    rubric: Array<{ criterionId: string; title: string; score: number; maxScore: number }>;
+    strengths: string[];
+    gaps: string[];
+    recommendations: string[];
+  };
+
+  assert.equal(capturedAuthorization, "Bearer test-key");
+  assert.equal(capturedModel, "gpt-5-mini");
+  assert.equal(evaluation.model, "gpt-5-mini-2025-08-07");
+  assert.equal(evaluation.totalScore, 4);
+  assert.equal(evaluation.maxScore, 30);
+  assert.equal(evaluation.rubric.length, 6);
+  assert.equal(evaluation.rubric[0]?.criterionId, "requirements");
+  assert.deepEqual(evaluation.strengths, ["Clear top-level service boundaries."]);
+  assert.deepEqual(evaluation.gaps, ["No explicit capacity plan."]);
+  assert.deepEqual(evaluation.recommendations, ["Add datastore partitioning and failure handling."]);
+});

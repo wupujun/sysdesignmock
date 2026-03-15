@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createBoard, fetchBoards, removeBoard, type BoardMeta } from "../api";
+import { createBoard, evaluateBoard, fetchBoards, removeBoard, type BoardEvaluationResult, type BoardMeta } from "../api";
+
+const EVALUATION_STORAGE_KEY = "sysdesignmock-evaluation-config";
 
 export function HomePage() {
   const navigate = useNavigate();
@@ -10,10 +12,48 @@ export function HomePage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [evaluationApiKey, setEvaluationApiKey] = useState("");
+  const [evaluationModel, setEvaluationModel] = useState("gpt-5-mini");
+  const [evaluationBusy, setEvaluationBusy] = useState(false);
+  const [evaluationError, setEvaluationError] = useState<string | null>(null);
+  const [evaluationResult, setEvaluationResult] = useState<BoardEvaluationResult | null>(null);
 
   useEffect(() => {
     void loadBoards();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const stored = window.localStorage.getItem(EVALUATION_STORAGE_KEY);
+    if (!stored) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(stored) as { apiKey?: string; model?: string };
+      setEvaluationApiKey(typeof parsed.apiKey === "string" ? parsed.apiKey : "");
+      setEvaluationModel(typeof parsed.model === "string" && parsed.model.trim() ? parsed.model : "gpt-5-mini");
+    } catch {
+      // Ignore malformed local state.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      EVALUATION_STORAGE_KEY,
+      JSON.stringify({
+        apiKey: evaluationApiKey,
+        model: evaluationModel
+      })
+    );
+  }, [evaluationApiKey, evaluationModel]);
 
   async function loadBoards() {
     setLoading(true);
@@ -41,6 +81,11 @@ export function HomePage() {
     filteredBoards.find((board) => board.id === selectedId) ??
     boards.find((board) => board.id === selectedId) ??
     null;
+
+  useEffect(() => {
+    setEvaluationError(null);
+    setEvaluationResult(null);
+  }, [selectedBoard?.id]);
 
   async function handleCreate() {
     setBusy(true);
@@ -73,6 +118,26 @@ export function HomePage() {
       setError(err instanceof Error ? err.message : "Failed to delete board");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleEvaluate() {
+    if (!selectedBoard) {
+      return;
+    }
+
+    setEvaluationBusy(true);
+    setEvaluationError(null);
+    try {
+      const result = await evaluateBoard(selectedBoard.id, {
+        apiKey: evaluationApiKey,
+        model: evaluationModel
+      });
+      setEvaluationResult(result);
+    } catch (err) {
+      setEvaluationError(err instanceof Error ? err.message : "Failed to evaluate board");
+    } finally {
+      setEvaluationBusy(false);
     }
   }
 
@@ -161,6 +226,94 @@ export function HomePage() {
               <button className="danger-button" onClick={handleDelete} disabled={busy}>
                 Delete
               </button>
+            </div>
+            <div className="evaluation-panel">
+              <div className="evaluation-panel-header">
+                <div>
+                  <p className="eyebrow">Evaluation</p>
+                  <h3>LLM Review</h3>
+                </div>
+                {evaluationResult ? (
+                  <div className="evaluation-score">
+                    {evaluationResult.totalScore}/{evaluationResult.maxScore}
+                  </div>
+                ) : null}
+              </div>
+              <p className="muted">Run a rubric-based review against the selected saved board.</p>
+              <label className="search evaluation-field">
+                <span>API Key</span>
+                <input
+                  type="password"
+                  value={evaluationApiKey}
+                  onChange={(event) => setEvaluationApiKey(event.target.value)}
+                  placeholder="sk-..."
+                />
+              </label>
+              <label className="search evaluation-field">
+                <span>Model</span>
+                <input
+                  value={evaluationModel}
+                  onChange={(event) => setEvaluationModel(event.target.value)}
+                  placeholder="gpt-5-mini"
+                />
+              </label>
+              <div className="evaluation-actions">
+                <button
+                  className="primary-button"
+                  onClick={handleEvaluate}
+                  disabled={evaluationBusy || !evaluationApiKey.trim()}
+                >
+                  {evaluationBusy ? "Evaluating..." : "Evaluate Board"}
+                </button>
+                <span className="muted">Using: {selectedBoard.title}</span>
+              </div>
+              {evaluationError ? <div className="panel error">{evaluationError}</div> : null}
+              {evaluationResult ? (
+                <div className="evaluation-results">
+                  <div className="panel">
+                    <strong>Summary</strong>
+                    <p>{evaluationResult.summary}</p>
+                    <p className="muted">Model: {evaluationResult.model}</p>
+                  </div>
+                  <div className="evaluation-rubric">
+                    {evaluationResult.rubric.map((criterion) => (
+                      <article key={criterion.criterionId} className="panel evaluation-rubric-card">
+                        <div className="evaluation-rubric-header">
+                          <strong>{criterion.title}</strong>
+                          <span className="evaluation-score-chip">
+                            {criterion.score}/{criterion.maxScore}
+                          </span>
+                        </div>
+                        <p>{criterion.justification}</p>
+                      </article>
+                    ))}
+                  </div>
+                  <div className="panel">
+                    <strong>Strengths</strong>
+                    <ul className="evaluation-list">
+                      {evaluationResult.strengths.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="panel">
+                    <strong>Gaps</strong>
+                    <ul className="evaluation-list">
+                      {evaluationResult.gaps.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="panel">
+                    <strong>Recommendations</strong>
+                    <ul className="evaluation-list">
+                      {evaluationResult.recommendations.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </>
         ) : (

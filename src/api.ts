@@ -20,6 +20,25 @@ export type BoardRecord = {
   scene: SceneData;
 };
 
+export type EvaluationCriterion = {
+  criterionId: string;
+  title: string;
+  score: number;
+  maxScore: number;
+  justification: string;
+};
+
+export type BoardEvaluationResult = {
+  model: string;
+  summary: string;
+  totalScore: number;
+  maxScore: number;
+  rubric: EvaluationCriterion[];
+  strengths: string[];
+  gaps: string[];
+  recommendations: string[];
+};
+
 export type RecordingFrame = {
   timestampMs: number;
   imagePath: string;
@@ -111,4 +130,20 @@ export async function removeRecording(boardId: string, recordingId: string) {
   if (!response.ok) {
     throw new Error(`Delete failed with ${response.status}`);
   }
+}
+
+export async function evaluateBoard(
+  boardId: string,
+  payload: {
+    apiKey: string;
+    model: string;
+  }
+) {
+  return parseJson<BoardEvaluationResult>(
+    await fetch(`/api/boards/${boardId}/evaluate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    })
+  );
 }
