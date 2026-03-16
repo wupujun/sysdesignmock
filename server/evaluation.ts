@@ -20,15 +20,29 @@ export type BoardEvaluationResult = {
   recommendations: string[];
 };
 
-type OpenAIResponseShape = {
+export type EvaluationConfig = {
+  providerId: string;
+  endpoint: string;
+  apiKey: string;
+  model: string;
+};
+
+export type LlmValidationResult = {
+  ok: true;
+  model: string;
+  providerId: string;
+  endpoint: string;
+};
+
+type ChatCompletionsResponseShape = {
   model?: string;
-  output_text?: string;
-  output?: Array<{
-    type?: string;
-    content?: Array<{
-      type?: string;
-      text?: string;
-    }>;
+  choices?: Array<{
+    message?: {
+      content?: string | Array<{
+        type?: string;
+        text?: string;
+      }>;
+    };
   }>;
 };
 
@@ -41,7 +55,11 @@ const RUBRIC = [
   { criterionId: "security_ops", title: "Security And Operations", maxScore: 5 }
 ] as const;
 
-export async function evaluateBoardWithOpenAI(boardId: string, apiKey: string, model: string): Promise<BoardEvaluationResult | null> {
+export async function evaluateBoardWithOpenAI(
+  boardId: string,
+  config: EvaluationConfig
+): Promise<BoardEvaluationResult | null> {
+  const { providerId, endpoint, apiKey, model } = config;
   const board = await getBoard(boardId);
   if (!board) {
     return null;
@@ -50,94 +68,65 @@ export async function evaluateBoardWithOpenAI(boardId: string, apiKey: string, m
   const previewDataUrl = await getBoardPreviewDataUrl(board.meta.id);
   const requestBody = {
     model,
-    instructions:
-      "You are a senior system design interviewer. Evaluate the provided system design board using the supplied rubric. Be concrete, fair, and technically rigorous. Score each rubric item from 0 to its maxScore. Reward clear structure, tradeoff discussion, scalability thinking, and operational realism. Do not invent components that are not present on the board.",
-    input: [
+    temperature: 0.2,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a senior system design interviewer. Evaluate the provided system design board using the supplied rubric. Be concrete, fair, and technically rigorous. Score each rubric item from 0 to its maxScore. Reward clear structure, tradeoff discussion, scalability thinking, and operational realism. Do not invent components that are not present on the board. Return only valid JSON."
+      },
       {
         role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: buildEvaluationInput(board)
-          },
-          ...(previewDataUrl
-            ? [
-                {
-                  type: "input_image" as const,
-                  image_url: previewDataUrl,
-                  detail: "high" as const
-                }
-              ]
-            : [])
-        ]
+        content: buildUserContent(buildEvaluationInput(board), previewDataUrl, providerId)
       }
-    ],
-    text: {
-      format: {
-        type: "json_schema",
-        name: "system_design_board_evaluation",
-        strict: true,
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          required: ["summary", "totalScore", "maxScore", "rubric", "strengths", "gaps", "recommendations"],
-          properties: {
-            summary: { type: "string" },
-            totalScore: { type: "number" },
-            maxScore: { type: "number" },
-            rubric: {
-              type: "array",
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["criterionId", "title", "score", "maxScore", "justification"],
-                properties: {
-                  criterionId: { type: "string" },
-                  title: { type: "string" },
-                  score: { type: "number" },
-                  maxScore: { type: "number" },
-                  justification: { type: "string" }
-                }
-              }
-            },
-            strengths: {
-              type: "array",
-              items: { type: "string" }
-            },
-            gaps: {
-              type: "array",
-              items: { type: "string" }
-            },
-            recommendations: {
-              type: "array",
-              items: { type: "string" }
-            }
-          }
-        }
-      }
-    }
+    ]
   };
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(requestBody)
-  });
+  const response = await postChatCompletion(config, requestBody);
 
   if (!response.ok) {
     throw new Error(await readOpenAIError(response));
   }
 
-  const raw = (await response.json()) as OpenAIResponseShape;
+  const raw = (await response.json()) as ChatCompletionsResponseShape;
   const outputText = getOutputText(raw);
   if (!outputText) {
-    throw new Error("OpenAI evaluation returned no text output.");
+    throw new Error("LLM evaluation returned no text output.");
   }
 
-  return normalizeEvaluationResult(raw.model ?? model, JSON.parse(outputText) as Partial<BoardEvaluationResult>);
+  return normalizeEvaluationResult(raw.model ?? model, parseEvaluationJson(outputText));
+}
+
+export async function validateLlmConfig(config: EvaluationConfig): Promise<LlmValidationResult> {
+  const requestBody = {
+    model: config.model,
+    temperature: 0,
+    max_tokens: 16,
+    messages: [
+      {
+        role: "system",
+        content: "Reply with exactly OK."
+      },
+      {
+        role: "user",
+        content: "Connection test"
+      }
+    ]
+  };
+
+  const response = await postChatCompletion(config, requestBody);
+
+  if (!response.ok) {
+    throw new Error(await readOpenAIError(response));
+  }
+
+  const raw = (await response.json()) as ChatCompletionsResponseShape;
+  return {
+    ok: true,
+    model: raw.model ?? config.model,
+    providerId: config.providerId,
+    endpoint: config.endpoint
+  };
 }
 
 export function buildEvaluationInput(board: BoardRecord) {
@@ -229,24 +218,21 @@ async function readOpenAIError(response: Response) {
   } catch {
     // Fall through to raw text.
   }
-  return text || `OpenAI request failed with ${response.status}`;
+  return text || `LLM request failed with ${response.status}`;
 }
 
-function getOutputText(response: OpenAIResponseShape) {
-  if (typeof response.output_text === "string" && response.output_text.trim()) {
-    return response.output_text;
+function getOutputText(response: ChatCompletionsResponseShape) {
+  const content = response.choices?.[0]?.message?.content;
+  if (typeof content === "string" && content.trim()) {
+    return content;
   }
 
-  for (const item of response.output ?? []) {
-    if (item.type !== "message") {
-      continue;
-    }
-
-    for (const content of item.content ?? []) {
-      if (content.type === "output_text" && typeof content.text === "string" && content.text.trim()) {
-        return content.text;
-      }
-    }
+  if (Array.isArray(content)) {
+    return content
+      .filter((item) => item.type === "text" && typeof item.text === "string")
+      .map((item) => item.text?.trim() ?? "")
+      .filter(Boolean)
+      .join("\n");
   }
 
   return "";
@@ -270,4 +256,74 @@ function clampScore(score: unknown, maxScore: number) {
   }
 
   return Math.max(0, Math.min(maxScore, Math.round(score * 10) / 10));
+}
+
+function normalizeChatCompletionsEndpoint(value: string) {
+  const trimmed = value.trim().replace(/\/+$/, "");
+
+  if (!trimmed) {
+    throw new Error("Evaluation endpoint is required.");
+  }
+
+  try {
+    const url = new URL(trimmed);
+    if (url.pathname.endsWith("/chat/completions")) {
+      return url.toString();
+    }
+
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/chat/completions`;
+    return url.toString();
+  } catch {
+    throw new Error("Evaluation endpoint must be a valid URL.");
+  }
+}
+
+function parseEvaluationJson(value: string): Partial<BoardEvaluationResult> {
+  const trimmed = value.trim();
+
+  try {
+    return JSON.parse(trimmed) as Partial<BoardEvaluationResult>;
+  } catch {
+    const match = trimmed.match(/```json\s*([\s\S]*?)```/i) ?? trimmed.match(/(\{[\s\S]*\})/);
+    if (!match?.[1]) {
+      throw new Error("LLM evaluation returned invalid JSON.");
+    }
+    return JSON.parse(match[1]) as Partial<BoardEvaluationResult>;
+  }
+}
+
+function buildUserContent(summary: string, previewDataUrl: string | null, providerId: string) {
+  const prompt = [
+    summary,
+    "",
+    "Return JSON with exactly these keys:",
+    "summary, totalScore, maxScore, rubric, strengths, gaps, recommendations",
+    "",
+    "Rubric items must use these criterion ids and max scores:",
+    JSON.stringify(RUBRIC)
+  ].join("\n");
+
+  if (!previewDataUrl || !supportsImageInput(providerId)) {
+    return prompt;
+  }
+
+  return [
+    { type: "text", text: prompt },
+    { type: "image_url", image_url: { url: previewDataUrl } }
+  ];
+}
+
+function supportsImageInput(providerId: string) {
+  return providerId === "openai" || providerId === "claude" || providerId === "gemini";
+}
+
+function postChatCompletion(config: EvaluationConfig, requestBody: Record<string, unknown>) {
+  return fetch(normalizeChatCompletionsEndpoint(config.endpoint), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(requestBody)
+  });
 }

@@ -13,7 +13,7 @@ FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3001
+ENV PORT=3000
 ENV WHITEBOARD_DATA_DIR=/app/data
 
 COPY package.json package-lock.json ./
@@ -23,6 +23,6 @@ COPY --from=build /app/dist ./dist
 
 RUN mkdir -p /app/data
 
-EXPOSE 3001
+EXPOSE 3000
 
 CMD ["npm", "start"]

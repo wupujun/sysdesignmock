@@ -4,9 +4,9 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3001:3001"
+      - "3000:3000"
     environment:
-      PORT: 3001
+      PORT: 3000
       WHITEBOARD_DATA_DIR: /app/data
     volumes:
       - sysdesignmock-data:/app/data

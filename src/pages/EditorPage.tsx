@@ -232,9 +232,11 @@ export function EditorPage() {
       savedSnapshotRef.current = createSavedSnapshot(title, currentScene);
       setStatus("saved");
       setSecondsUntilAutosave(AUTOSAVE_INTERVAL_SECONDS);
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : `Failed to ${isAutosave ? "auto-save" : "save"} board`);
       setStatus("error");
+      return false;
     }
   }
 
@@ -396,6 +398,25 @@ export function EditorPage() {
     navigate("/");
   }
 
+  async function handleOpenEvaluation() {
+    if (!boardId) {
+      return;
+    }
+
+    if (status === "saving") {
+      return;
+    }
+
+    if (status === "dirty" || status === "error") {
+      const saved = await handleSave();
+      if (!saved) {
+        return;
+      }
+    }
+
+    navigate(`/boards/${boardId}/evaluation`);
+  }
+
   if (!boardId) {
     return <div className="editor-shell">Missing board id.</div>;
   }
@@ -434,6 +455,9 @@ export function EditorPage() {
           </div>
         </div>
         <div className="editor-actions">
+          <button type="button" className="secondary-button" onClick={() => void handleOpenEvaluation()} disabled={status === "saving"}>
+            Evaluation
+          </button>
           <div className="recordings-menu" ref={recordingsMenuRef}>
             <button
               type="button"

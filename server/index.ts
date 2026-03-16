@@ -14,13 +14,14 @@ import {
   saveBoard,
   type SceneData
 } from "./storage.js";
-import { evaluateBoardWithOpenAI } from "./evaluation.js";
+import { evaluateBoardWithOpenAI, validateLlmConfig } from "./evaluation.js";
 
 const currentFile = fileURLToPath(import.meta.url);
 
 export function createApp() {
   const app = express();
   const clientDist = path.join(process.cwd(), "dist", "client");
+  const isProduction = process.env.NODE_ENV === "production";
   const previewsDir = process.env.WHITEBOARD_DATA_DIR
     ? path.join(path.resolve(process.env.WHITEBOARD_DATA_DIR), "previews")
     : path.join(process.cwd(), "data", "previews");
@@ -99,8 +100,19 @@ export function createApp() {
   });
 
   app.post("/api/boards/:id/evaluate", async (req, res) => {
+    const providerId = typeof req.body?.providerId === "string" && req.body.providerId.trim()
+      ? req.body.providerId.trim()
+      : "openai";
+    const endpoint = typeof req.body?.endpoint === "string" && req.body.endpoint.trim()
+      ? req.body.endpoint.trim()
+      : "https://api.openai.com/v1";
     const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
     const model = typeof req.body?.model === "string" && req.body.model.trim() ? req.body.model.trim() : "gpt-5-mini";
+
+    if (!endpoint) {
+      res.status(400).json({ error: "Endpoint is required" });
+      return;
+    }
 
     if (!apiKey) {
       res.status(400).json({ error: "API key is required" });
@@ -108,7 +120,12 @@ export function createApp() {
     }
 
     try {
-      const evaluation = await evaluateBoardWithOpenAI(req.params.id, apiKey, model);
+      const evaluation = await evaluateBoardWithOpenAI(req.params.id, {
+        providerId,
+        endpoint,
+        apiKey,
+        model
+      });
       if (!evaluation) {
         res.status(404).json({ error: "Board not found" });
         return;
@@ -172,17 +189,60 @@ export function createApp() {
     res.status(204).send();
   });
 
-  app.use(express.static(clientDist));
+  app.post("/api/llm/validate", async (req, res) => {
+    const providerId = typeof req.body?.providerId === "string" && req.body.providerId.trim()
+      ? req.body.providerId.trim()
+      : "openai";
+    const endpoint = typeof req.body?.endpoint === "string" && req.body.endpoint.trim()
+      ? req.body.endpoint.trim()
+      : "https://api.openai.com/v1";
+    const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
+    const model = typeof req.body?.model === "string" && req.body.model.trim() ? req.body.model.trim() : "";
 
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(clientDist, "index.html"));
+    if (!endpoint) {
+      res.status(400).json({ error: "Endpoint is required" });
+      return;
+    }
+
+    if (!apiKey) {
+      res.status(400).json({ error: "API key is required" });
+      return;
+    }
+
+    if (!model) {
+      res.status(400).json({ error: "Model is required" });
+      return;
+    }
+
+    try {
+      const result = await validateLlmConfig({
+        providerId,
+        endpoint,
+        apiKey,
+        model
+      });
+      res.json(result);
+    } catch (error) {
+      res.status(502).json({
+        error: error instanceof Error ? error.message : "LLM validation failed"
+      });
+    }
   });
+
+  if (isProduction) {
+    app.use(express.static(clientDist));
+
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(clientDist, "index.html"));
+    });
+  }
 
   return app;
 }
 
 if (process.argv[1] === currentFile) {
-  const port = Number(process.env.PORT ?? 3001);
+  const defaultPort = process.env.NODE_ENV === "production" ? 3000 : 3001;
+  const port = Number(process.env.PORT ?? defaultPort);
   createApp().listen(port, () => {
     console.log(`Local whiteboard app listening on http://localhost:${port}`);
   });

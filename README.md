@@ -50,6 +50,10 @@ Frontend:
 Backend API:
 - `http://localhost:3001`
 
+Notes:
+- In development, the web UI is only served by Vite on `5173`.
+- The Express server on `3001` is API/static-assets only and does not serve the app shell.
+
 ## Docker
 
 Run the app locally in Docker:
@@ -59,10 +63,10 @@ docker compose up --build
 ```
 
 Open:
-- `http://localhost:3001`
+- `http://localhost:3000`
 
 Notes:
-- In Docker, the client is served by the Node server from the production build.
+- In Docker, the client is served by the Node server from the production build on `3000`.
 - Board data, previews, and recordings are persisted in the named Docker volume `sysdesignmock-data`.
 
 Stop the containers:
@@ -90,6 +94,9 @@ Start the production server:
 ```powershell
 npm.cmd start
 ```
+
+Open:
+- `http://localhost:3000`
 
 ## Testing
 

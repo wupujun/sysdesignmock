@@ -55,6 +55,13 @@ export type RecordingMeta = {
   frames: RecordingFrame[];
 };
 
+export type LlmValidationResult = {
+  ok: true;
+  model: string;
+  providerId: string;
+  endpoint: string;
+};
+
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
@@ -135,12 +142,29 @@ export async function removeRecording(boardId: string, recordingId: string) {
 export async function evaluateBoard(
   boardId: string,
   payload: {
+    providerId: string;
+    endpoint: string;
     apiKey: string;
     model: string;
   }
 ) {
   return parseJson<BoardEvaluationResult>(
     await fetch(`/api/boards/${boardId}/evaluate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    })
+  );
+}
+
+export async function validateLlmConfig(payload: {
+  providerId: string;
+  endpoint: string;
+  apiKey: string;
+  model: string;
+}) {
+  return parseJson<LlmValidationResult>(
+    await fetch("/api/llm/validate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)

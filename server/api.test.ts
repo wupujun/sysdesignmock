@@ -160,9 +160,10 @@ test("board evaluation API validates inputs and returns normalized rubric output
   const originalFetch = globalThis.fetch;
   let capturedAuthorization = "";
   let capturedModel = "";
+  let capturedUrl = "";
 
   globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
-    assert.equal(String(input), "https://api.openai.com/v1/responses");
+    capturedUrl = String(input);
     capturedAuthorization = String(init?.headers && (init.headers as Record<string, string>).Authorization);
     const body = JSON.parse(String(init?.body)) as { model: string };
     capturedModel = body.model;
@@ -170,23 +171,29 @@ test("board evaluation API validates inputs and returns normalized rubric output
     return new Response(
       JSON.stringify({
         model: "gpt-5-mini-2025-08-07",
-        output_text: JSON.stringify({
-          summary: "The design has a solid backbone but leaves scaling details thin.",
-          totalScore: 21,
-          maxScore: 30,
-          rubric: [
-            {
-              criterionId: "requirements",
-              title: "Requirements Clarity",
-              score: 4,
-              maxScore: 5,
-              justification: "The board shows the main use case and user flow."
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                summary: "The design has a solid backbone but leaves scaling details thin.",
+                totalScore: 21,
+                maxScore: 30,
+                rubric: [
+                  {
+                    criterionId: "requirements",
+                    title: "Requirements Clarity",
+                    score: 4,
+                    maxScore: 5,
+                    justification: "The board shows the main use case and user flow."
+                  }
+                ],
+                strengths: ["Clear top-level service boundaries."],
+                gaps: ["No explicit capacity plan."],
+                recommendations: ["Add datastore partitioning and failure handling."]
+              })
             }
-          ],
-          strengths: ["Clear top-level service boundaries."],
-          gaps: ["No explicit capacity plan."],
-          recommendations: ["Add datastore partitioning and failure handling."]
-        })
+          }
+        ]
       }),
       {
         status: 200,
@@ -219,14 +226,19 @@ test("board evaluation API validates inputs and returns normalized rubric output
   const missingKeyResponse = await originalFetch(`${baseUrl}/api/boards/${createdBoard.id}/evaluate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey: "", model: "gpt-5-mini" })
+    body: JSON.stringify({ endpoint: "https://api.openai.com/v1", apiKey: "", model: "gpt-5-mini" })
   });
   assert.equal(missingKeyResponse.status, 400);
 
   const evaluationResponse = await originalFetch(`${baseUrl}/api/boards/${createdBoard.id}/evaluate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey: "test-key", model: "gpt-5-mini" })
+    body: JSON.stringify({
+      providerId: "deepseek",
+      endpoint: "https://llm.example.com/openai/v1",
+      apiKey: "test-key",
+      model: "gpt-5-mini"
+    })
   });
   assert.equal(evaluationResponse.status, 200);
 
@@ -241,6 +253,7 @@ test("board evaluation API validates inputs and returns normalized rubric output
     recommendations: string[];
   };
 
+  assert.equal(capturedUrl, "https://llm.example.com/openai/v1/chat/completions");
   assert.equal(capturedAuthorization, "Bearer test-key");
   assert.equal(capturedModel, "gpt-5-mini");
   assert.equal(evaluation.model, "gpt-5-mini-2025-08-07");
@@ -251,4 +264,79 @@ test("board evaluation API validates inputs and returns normalized rubric output
   assert.deepEqual(evaluation.strengths, ["Clear top-level service boundaries."]);
   assert.deepEqual(evaluation.gaps, ["No explicit capacity plan."]);
   assert.deepEqual(evaluation.recommendations, ["Add datastore partitioning and failure handling."]);
+});
+
+test("llm validation endpoint checks endpoint, key, and model", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "whiteboard-llm-validate-"));
+  process.env.WHITEBOARD_DATA_DIR = tempDir;
+
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = "";
+  let capturedAuthorization = "";
+
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+    capturedUrl = String(input);
+    capturedAuthorization = String(init?.headers && (init.headers as Record<string, string>).Authorization);
+
+    return new Response(
+      JSON.stringify({
+        model: "deepseek-chat"
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }
+    );
+  }) as typeof fetch;
+
+  const app = createApp();
+  const server = app.listen(0);
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  t.after(async () => {
+    server.close();
+    globalThis.fetch = originalFetch;
+    delete process.env.WHITEBOARD_DATA_DIR;
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const missingModelResponse = await originalFetch(`${baseUrl}/api/llm/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      providerId: "deepseek",
+      endpoint: "https://api.deepseek.com/v1",
+      apiKey: "test-key",
+      model: ""
+    })
+  });
+  assert.equal(missingModelResponse.status, 400);
+
+  const validateResponse = await originalFetch(`${baseUrl}/api/llm/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      providerId: "deepseek",
+      endpoint: "https://api.deepseek.com/v1",
+      apiKey: "test-key",
+      model: "deepseek-chat"
+    })
+  });
+  assert.equal(validateResponse.status, 200);
+
+  const validation = await validateResponse.json() as {
+    ok: boolean;
+    model: string;
+    providerId: string;
+    endpoint: string;
+  };
+
+  assert.equal(capturedUrl, "https://api.deepseek.com/v1/chat/completions");
+  assert.equal(capturedAuthorization, "Bearer test-key");
+  assert.equal(validation.ok, true);
+  assert.equal(validation.model, "deepseek-chat");
+  assert.equal(validation.providerId, "deepseek");
+  assert.equal(validation.endpoint, "https://api.deepseek.com/v1");
 });
