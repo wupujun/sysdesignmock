@@ -171,3 +171,22 @@ export async function validateLlmConfig(payload: {
     })
   );
 }
+
+export async function generateImprovedBoard(
+  boardId: string,
+  payload: {
+    providerId: string;
+    endpoint: string;
+    apiKey: string;
+    model: string;
+    evaluation: BoardEvaluationResult;
+  }
+) {
+  return parseJson<BoardMeta>(
+    await fetch(`/api/boards/${boardId}/generate-improved`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    })
+  );
+}

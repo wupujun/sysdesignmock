@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { getBoard, previewDiskPath, type BoardRecord } from "./storage.js";
+import { createBoard, getBoard, previewDiskPath, saveBoard, type BoardMeta, type BoardRecord, type SceneData } from "./storage.js";
 
 export type EvaluationCriterion = {
   criterionId: string;
@@ -32,6 +32,22 @@ export type LlmValidationResult = {
   model: string;
   providerId: string;
   endpoint: string;
+};
+
+type ImprovementSpec = {
+  title: string;
+  summary: string;
+  nodes: Array<{
+    id: string;
+    label: string;
+    kind: string;
+  }>;
+  edges: Array<{
+    from: string;
+    to: string;
+    label?: string;
+  }>;
+  annotations: string[];
 };
 
 type ChatCompletionsResponseShape = {
@@ -127,6 +143,51 @@ export async function validateLlmConfig(config: EvaluationConfig): Promise<LlmVa
     providerId: config.providerId,
     endpoint: config.endpoint
   };
+}
+
+export async function generateImprovedBoardDraft(
+  boardId: string,
+  config: EvaluationConfig,
+  evaluation: BoardEvaluationResult
+): Promise<BoardMeta | null> {
+  const board = await getBoard(boardId);
+  if (!board) {
+    return null;
+  }
+
+  const previewDataUrl = await getBoardPreviewDataUrl(board.meta.id);
+  const requestBody = {
+    model: config.model,
+    temperature: 0.3,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a systems design coach improving a whiteboard. Return only valid JSON. Propose a cleaner improved system design using a compact graph spec with nodes, edges, annotations, title, and summary. Keep the design realistic and aligned to the original board plus feedback."
+      },
+      {
+        role: "user",
+        content: buildImprovementContent(board, evaluation, previewDataUrl, config.providerId)
+      }
+    ]
+  };
+
+  const response = await postChatCompletion(config, requestBody);
+  if (!response.ok) {
+    throw new Error(await readOpenAIError(response));
+  }
+
+  const raw = (await response.json()) as ChatCompletionsResponseShape;
+  const outputText = getOutputText(raw);
+  if (!outputText) {
+    throw new Error("LLM improvement generation returned no text output.");
+  }
+
+  const spec = parseImprovementSpec(outputText);
+  const scene = buildSceneFromImprovementSpec(spec);
+  const draft = await createBoard(`${board.meta.title} (Improved Draft)`);
+  const saved = await saveBoard(draft.meta.id, spec.title || draft.meta.title, scene);
+  return saved?.meta ?? draft.meta;
 }
 
 export function buildEvaluationInput(board: BoardRecord) {
@@ -326,4 +387,295 @@ function postChatCompletion(config: EvaluationConfig, requestBody: Record<string
     },
     body: JSON.stringify(requestBody)
   });
+}
+
+function buildImprovementContent(
+  board: BoardRecord,
+  evaluation: BoardEvaluationResult,
+  previewDataUrl: string | null,
+  providerId: string
+) {
+  const prompt = [
+    buildEvaluationInput(board),
+    "",
+    "Evaluation summary:",
+    evaluation.summary,
+    "",
+    "Strengths:",
+    ...evaluation.strengths.map((item) => `- ${item}`),
+    "",
+    "Gaps:",
+    ...evaluation.gaps.map((item) => `- ${item}`),
+    "",
+    "Recommendations:",
+    ...evaluation.recommendations.map((item) => `- ${item}`),
+    "",
+    "Return JSON with exactly these keys:",
+    "title, summary, nodes, edges, annotations",
+    "",
+    "Node shape:",
+    '{"id":"string","label":"string","kind":"service|database|cache|queue|client|external|worker|storage"}',
+    "Edge shape:",
+    '{"from":"nodeId","to":"nodeId","label":"optional string"}',
+    "annotations: string[] with up to 5 concise notes"
+  ].join("\n");
+
+  if (!previewDataUrl || !supportsImageInput(providerId)) {
+    return prompt;
+  }
+
+  return [
+    { type: "text", text: prompt },
+    { type: "image_url", image_url: { url: previewDataUrl } }
+  ];
+}
+
+function parseImprovementSpec(value: string): ImprovementSpec {
+  const parsed = parseJsonObject(value) as Partial<ImprovementSpec>;
+  const nodes = Array.isArray(parsed.nodes) ? parsed.nodes : [];
+  const edges = Array.isArray(parsed.edges) ? parsed.edges : [];
+  const annotations = Array.isArray(parsed.annotations) ? parsed.annotations : [];
+
+  return {
+    title: typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim() : "Improved System Design Draft",
+    summary: typeof parsed.summary === "string" && parsed.summary.trim() ? parsed.summary.trim() : "Improved board draft",
+    nodes: nodes
+      .filter((node): node is { id: string; label: string; kind: string } => {
+        return !!node && typeof node === "object" && typeof node.id === "string" && typeof node.label === "string";
+      })
+      .slice(0, 12)
+      .map((node) => ({
+        id: node.id.trim(),
+        label: node.label.trim(),
+        kind: typeof node.kind === "string" && node.kind.trim() ? node.kind.trim() : "service"
+      }))
+      .filter((node) => node.id && node.label),
+    edges: edges
+      .filter((edge): edge is { from: string; to: string; label?: string } => {
+        return !!edge && typeof edge === "object" && typeof edge.from === "string" && typeof edge.to === "string";
+      })
+      .slice(0, 20)
+      .map((edge) => ({
+        from: edge.from.trim(),
+        to: edge.to.trim(),
+        label: typeof edge.label === "string" ? edge.label.trim() : ""
+      }))
+      .filter((edge) => edge.from && edge.to),
+    annotations: annotations
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 5)
+  };
+}
+
+function buildSceneFromImprovementSpec(spec: ImprovementSpec): SceneData {
+  const elements: unknown[] = [];
+  const nodeLayout = new Map<string, { x: number; y: number; width: number; height: number }>();
+  const columns = Math.min(3, Math.max(1, Math.ceil(Math.sqrt(spec.nodes.length || 1))));
+  const width = 220;
+  const height = 100;
+  const xGap = 120;
+  const yGap = 120;
+
+  spec.nodes.forEach((node, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const x = column * (width + xGap);
+    const y = row * (height + yGap);
+    nodeLayout.set(node.id, { x, y, width, height });
+    elements.push(createRectangleElement(node.id, x, y, width, height, getNodeStyle(node.kind)));
+    elements.push(createTextElement(`${node.id}_label`, node.label, x + 20, y + 32, 28));
+  });
+
+  spec.edges.forEach((edge, index) => {
+    const from = nodeLayout.get(edge.from);
+    const to = nodeLayout.get(edge.to);
+    if (!from || !to) {
+      return;
+    }
+
+    const arrowId = `edge_${index}_${edge.from}_${edge.to}`;
+    const startX = from.x + from.width;
+    const startY = from.y + from.height / 2;
+    const endX = to.x;
+    const endY = to.y + to.height / 2;
+    elements.push(createArrowElement(arrowId, startX, startY, endX - startX, endY - startY));
+    if (edge.label) {
+      elements.push(createTextElement(`${arrowId}_label`, edge.label, startX + (endX - startX) / 2 - 40, startY + (endY - startY) / 2 - 28, 22));
+    }
+  });
+
+  spec.annotations.forEach((annotation, index) => {
+    const baseY = Math.ceil(spec.nodes.length / columns) * (height + yGap) + 40;
+    elements.push(createTextElement(`annotation_${index}`, `• ${annotation}`, 0, baseY + index * 34, 24, "#8f291c"));
+  });
+
+  return {
+    type: "excalidraw",
+    version: 2,
+    source: "local-whiteboard-app",
+    elements,
+    appState: {
+      viewBackgroundColor: "#ffffff",
+      gridSize: null,
+      zoom: { value: 1 }
+    },
+    files: {}
+  };
+}
+
+function createRectangleElement(
+  id: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  style: { strokeColor: string; backgroundColor: string }
+) {
+  return {
+    id,
+    type: "rectangle",
+    x,
+    y,
+    width,
+    height,
+    angle: 0,
+    strokeColor: style.strokeColor,
+    backgroundColor: style.backgroundColor,
+    fillStyle: "solid",
+    strokeWidth: 2,
+    strokeStyle: "solid",
+    roughness: 1,
+    opacity: 100,
+    groupIds: [],
+    frameId: null,
+    roundness: { type: 3 },
+    seed: hashSeed(id),
+    version: 1,
+    versionNonce: hashSeed(`${id}_nonce`),
+    isDeleted: false,
+    boundElements: null,
+    updated: Date.now(),
+    link: null,
+    locked: false
+  };
+}
+
+function createTextElement(id: string, text: string, x: number, y: number, height: number, strokeColor = "#18392b") {
+  return {
+    id,
+    type: "text",
+    x,
+    y,
+    width: Math.max(80, Math.min(220, text.length * 7)),
+    height,
+    angle: 0,
+    strokeColor,
+    backgroundColor: "transparent",
+    fillStyle: "hachure",
+    strokeWidth: 1,
+    strokeStyle: "solid",
+    roughness: 0,
+    opacity: 100,
+    groupIds: [],
+    frameId: null,
+    roundness: null,
+    seed: hashSeed(id),
+    version: 1,
+    versionNonce: hashSeed(`${id}_nonce`),
+    isDeleted: false,
+    boundElements: null,
+    updated: Date.now(),
+    link: null,
+    locked: false,
+    text,
+    fontSize: 20,
+    fontFamily: 1,
+    textAlign: "center",
+    verticalAlign: "middle",
+    containerId: null,
+    originalText: text,
+    lineHeight: 1.25,
+    baseline: 18
+  };
+}
+
+function createArrowElement(id: string, x: number, y: number, dx: number, dy: number) {
+  return {
+    id,
+    type: "arrow",
+    x,
+    y,
+    width: dx,
+    height: dy,
+    angle: 0,
+    strokeColor: "#3c5a4d",
+    backgroundColor: "transparent",
+    fillStyle: "hachure",
+    strokeWidth: 2,
+    strokeStyle: "solid",
+    roughness: 1,
+    opacity: 100,
+    groupIds: [],
+    frameId: null,
+    roundness: { type: 2 },
+    seed: hashSeed(id),
+    version: 1,
+    versionNonce: hashSeed(`${id}_nonce`),
+    isDeleted: false,
+    boundElements: null,
+    updated: Date.now(),
+    link: null,
+    locked: false,
+    points: [[0, 0], [dx, dy]],
+    lastCommittedPoint: null,
+    startBinding: null,
+    endBinding: null,
+    startArrowhead: null,
+    endArrowhead: "triangle"
+  };
+}
+
+function getNodeStyle(kind: string) {
+  switch (kind) {
+    case "database":
+      return { strokeColor: "#295a88", backgroundColor: "#dcecff" };
+    case "cache":
+      return { strokeColor: "#8a6a13", backgroundColor: "#fff2c7" };
+    case "queue":
+      return { strokeColor: "#7f3d8f", backgroundColor: "#f4e4fb" };
+    case "client":
+      return { strokeColor: "#1d6d4f", backgroundColor: "#dff7eb" };
+    case "external":
+      return { strokeColor: "#8f291c", backgroundColor: "#fde6e2" };
+    case "worker":
+      return { strokeColor: "#4a4a8f", backgroundColor: "#e9e9ff" };
+    case "storage":
+      return { strokeColor: "#475569", backgroundColor: "#e2e8f0" };
+    default:
+      return { strokeColor: "#18392b", backgroundColor: "#e7f0ec" };
+  }
+}
+
+function hashSeed(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash) || 1;
+}
+
+function parseJsonObject(value: string) {
+  const trimmed = value.trim();
+
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    const match = trimmed.match(/```json\s*([\s\S]*?)```/i) ?? trimmed.match(/(\{[\s\S]*\})/);
+    if (!match?.[1]) {
+      throw new Error("LLM generation returned invalid JSON.");
+    }
+    return JSON.parse(match[1]) as Record<string, unknown>;
+  }
 }

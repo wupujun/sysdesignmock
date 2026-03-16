@@ -14,7 +14,7 @@ import {
   saveBoard,
   type SceneData
 } from "./storage.js";
-import { evaluateBoardWithOpenAI, validateLlmConfig } from "./evaluation.js";
+import { evaluateBoardWithOpenAI, generateImprovedBoardDraft, validateLlmConfig } from "./evaluation.js";
 
 const currentFile = fileURLToPath(import.meta.url);
 
@@ -225,6 +225,50 @@ export function createApp() {
     } catch (error) {
       res.status(502).json({
         error: error instanceof Error ? error.message : "LLM validation failed"
+      });
+    }
+  });
+
+  app.post("/api/boards/:id/generate-improved", async (req, res) => {
+    const providerId = typeof req.body?.providerId === "string" && req.body.providerId.trim()
+      ? req.body.providerId.trim()
+      : "openai";
+    const endpoint = typeof req.body?.endpoint === "string" && req.body.endpoint.trim()
+      ? req.body.endpoint.trim()
+      : "https://api.openai.com/v1";
+    const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
+    const model = typeof req.body?.model === "string" && req.body.model.trim() ? req.body.model.trim() : "";
+    const evaluation = req.body?.evaluation;
+
+    if (!apiKey) {
+      res.status(400).json({ error: "API key is required" });
+      return;
+    }
+
+    if (!model) {
+      res.status(400).json({ error: "Model is required" });
+      return;
+    }
+
+    if (!evaluation || typeof evaluation !== "object") {
+      res.status(400).json({ error: "Evaluation result is required" });
+      return;
+    }
+
+    try {
+      const draft = await generateImprovedBoardDraft(
+        req.params.id,
+        { providerId, endpoint, apiKey, model },
+        evaluation as Parameters<typeof generateImprovedBoardDraft>[2]
+      );
+      if (!draft) {
+        res.status(404).json({ error: "Board not found" });
+        return;
+      }
+      res.status(201).json(draft);
+    } catch (error) {
+      res.status(502).json({
+        error: error instanceof Error ? error.message : "Draft generation failed"
       });
     }
   });

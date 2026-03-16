@@ -340,3 +340,95 @@ test("llm validation endpoint checks endpoint, key, and model", async (t) => {
   assert.equal(validation.providerId, "deepseek");
   assert.equal(validation.endpoint, "https://api.deepseek.com/v1");
 });
+
+test("improved draft generation creates a new board from evaluation feedback", async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "whiteboard-improve-api-"));
+  process.env.WHITEBOARD_DATA_DIR = tempDir;
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    return new Response(
+      JSON.stringify({
+        model: "gpt-5-mini-2025-08-07",
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                title: "Improved Evaluation Board",
+                summary: "Adds clearer tiers and data flow.",
+                nodes: [
+                  { id: "client", label: "Client", kind: "client" },
+                  { id: "api", label: "API Service", kind: "service" },
+                  { id: "db", label: "Primary DB", kind: "database" }
+                ],
+                edges: [
+                  { from: "client", to: "api", label: "HTTPS" },
+                  { from: "api", to: "db", label: "queries" }
+                ],
+                annotations: ["Add caching later for read scaling."]
+              })
+            }
+          }
+        ]
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      }
+    );
+  }) as typeof fetch;
+
+  const app = createApp();
+  const server = app.listen(0);
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+
+  t.after(async () => {
+    server.close();
+    globalThis.fetch = originalFetch;
+    delete process.env.WHITEBOARD_DATA_DIR;
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const createResponse = await originalFetch(`${baseUrl}/api/boards`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "Evaluation Board" })
+  });
+  const createdBoard = await createResponse.json() as { id: string };
+
+  const generateResponse = await originalFetch(`${baseUrl}/api/boards/${createdBoard.id}/generate-improved`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      providerId: "openai",
+      endpoint: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-5-mini",
+      evaluation: {
+        model: "gpt-5-mini",
+        summary: "Needs clearer decomposition.",
+        totalScore: 12,
+        maxScore: 30,
+        rubric: [],
+        strengths: ["Basic components are present."],
+        gaps: ["No clear persistence tier."],
+        recommendations: ["Add explicit API and database tiers."]
+      }
+    })
+  });
+  assert.equal(generateResponse.status, 201);
+  const draftMeta = await generateResponse.json() as { id: string; title: string };
+  assert.notEqual(draftMeta.id, createdBoard.id);
+  assert.equal(draftMeta.title, "Improved Evaluation Board");
+
+  const draftBoardResponse = await originalFetch(`${baseUrl}/api/boards/${draftMeta.id}`);
+  assert.equal(draftBoardResponse.status, 200);
+  const draftBoard = await draftBoardResponse.json() as {
+    meta: { title: string };
+    scene: { elements: unknown[] };
+  };
+  assert.equal(draftBoard.meta.title, "Improved Evaluation Board");
+  assert.ok(draftBoard.scene.elements.length >= 5);
+});

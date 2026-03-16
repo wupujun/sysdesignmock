@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { evaluateBoard, fetchBoard, type BoardEvaluationResult, type BoardRecord } from "../api";
+import { evaluateBoard, fetchBoard, generateImprovedBoard, type BoardEvaluationResult, type BoardRecord } from "../api";
 import { getProviderPreset, loadLlmConfig, type LlmConfig } from "../llmConfig";
 
 export function EvaluationPage() {
@@ -13,6 +13,8 @@ export function EvaluationPage() {
   const [evaluationBusy, setEvaluationBusy] = useState(false);
   const [evaluationError, setEvaluationError] = useState<string | null>(null);
   const [evaluationResult, setEvaluationResult] = useState<BoardEvaluationResult | null>(null);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!boardId) {
@@ -62,6 +64,29 @@ export function EvaluationPage() {
       setEvaluationError(err instanceof Error ? err.message : "Failed to evaluate board");
     } finally {
       setEvaluationBusy(false);
+    }
+  }
+
+  async function handleGenerateDraft() {
+    if (!boardId || !evaluationResult) {
+      return;
+    }
+
+    setDraftBusy(true);
+    setDraftError(null);
+    try {
+      const draft = await generateImprovedBoard(boardId, {
+        providerId: llmConfig.providerId,
+        endpoint: llmConfig.endpoint,
+        apiKey: llmConfig.apiKey,
+        model: llmConfig.model,
+        evaluation: evaluationResult
+      });
+      navigate(`/boards/${draft.id}/edit`);
+    } catch (err) {
+      setDraftError(err instanceof Error ? err.message : "Failed to generate improved draft");
+    } finally {
+      setDraftBusy(false);
     }
   }
 
@@ -124,6 +149,7 @@ export function EvaluationPage() {
               <div className="panel error">Configure an API key in LLM config before running evaluation.</div>
             ) : null}
             {evaluationError ? <div className="panel error">{evaluationError}</div> : null}
+            {draftError ? <div className="panel error">{draftError}</div> : null}
           </aside>
 
           <main className="evaluation-page-results">
@@ -141,6 +167,12 @@ export function EvaluationPage() {
                   </div>
                   <p>{evaluationResult.summary}</p>
                   <p className="muted">Model: {evaluationResult.model}</p>
+                  <div className="evaluation-actions">
+                    <button className="primary-button" onClick={handleGenerateDraft} disabled={draftBusy}>
+                      {draftBusy ? "Generating Draft..." : "Generate Improved Board"}
+                    </button>
+                    <span className="muted">Creates a new draft board instead of overwriting this one.</span>
+                  </div>
                 </div>
                 <div className="evaluation-rubric">
                   {evaluationResult.rubric.map((criterion) => (
