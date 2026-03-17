@@ -1,4 +1,4 @@
-# SysDesignMock
+# localexcalidraw/SysDesign Mock-up
 
 System design practice app built on top of Excalidraw, with local board storage, narrated replay, LLM-based evaluation, and draft regeneration.
 
